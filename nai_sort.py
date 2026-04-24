@@ -17,8 +17,22 @@ def clear_output_directory(output_directory):
                 os.remove(item_path)
 
 def categorize_image(image_metadata, output_directory):
-    description = image_metadata.get("Description", "").lower()
+    description = image_metadata.get("Description", "")
+    
+    comment = image_metadata.get("Comment", {})
+    if isinstance(comment, dict):
+        v4_prompt = comment.get("v4_prompt", {})
+        if isinstance(v4_prompt, dict):
+            caption = v4_prompt.get("caption", {})
+            if isinstance(caption, dict):
+                char_captions = caption.get("char_captions", [])
+                for cc in char_captions:
+                    if isinstance(cc, dict) and "char_caption" in cc:
+                        description += " " + cc.get("char_caption", "")
+
+    description = description.lower()
     file_path = image_metadata.get("File path")
+    file_name = os.path.basename(file_path.replace('\\', '/'))
     
     # Check for character tags
     characters_in_image = [tag for tag in CHARACTER_TAGS if re.search(r'(?<![^\W_]){0}(?![^\W_])'.format(re.escape(tag.lower())), description)]
@@ -27,7 +41,7 @@ def categorize_image(image_metadata, output_directory):
         char_tag = characters_in_image[0]
         char_tag_folder = os.path.join(output_directory, "character", char_tag)
         os.makedirs(char_tag_folder, exist_ok=True)
-        shutil.copy(file_path, char_tag_folder)
+        shutil.copy(file_path, os.path.join(char_tag_folder, file_name))
         return True
     
     # Check for regular tags
@@ -37,13 +51,13 @@ def categorize_image(image_metadata, output_directory):
         reg_tag = tags_in_image[0]
         reg_tag_folder = os.path.join(output_directory, "tags", reg_tag)
         os.makedirs(reg_tag_folder, exist_ok=True)
-        shutil.copy(file_path, reg_tag_folder)
+        shutil.copy(file_path, os.path.join(reg_tag_folder, file_name))
         return True
     
     # If no or multiple tags match, move to unsorted folder
     unsorted_folder = os.path.join(output_directory, "unsorted")
     os.makedirs(unsorted_folder, exist_ok=True)
-    shutil.copy(file_path, unsorted_folder)
+    shutil.copy(file_path, os.path.join(unsorted_folder, file_name))
     return False
 
 def sort_images(metadata_file, output_directory):
@@ -76,7 +90,7 @@ def copy_failed_attempts_to_folder(output_directory, failed_files):
     os.makedirs(unsorted_folder, exist_ok=True)
     for failed_file in failed_files:
         source_path = failed_file  # Use full file path
-        destination_path = os.path.join(unsorted_folder, os.path.basename(failed_file))  # Use only file name in destination
+        destination_path = os.path.join(unsorted_folder, os.path.basename(failed_file.replace('\\', '/')))  # Use only file name in destination
         shutil.copy2(source_path, destination_path)
 
 def main():
