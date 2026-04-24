@@ -4,6 +4,7 @@ from PIL import Image
 import numpy as np
 import gzip
 import json
+import concurrent.futures
 
 class LSBExtractor:
     def __init__(self, data):
@@ -52,34 +53,46 @@ class LSBExtractor:
         else:
             return None
 
+def process_single_image(file_path):
+    print(f"Processing {file_path}...")
+    try:
+        img = Image.open(file_path)
+        img = np.array(img)
+        assert img.shape[-1] == 4 and len(img.shape) == 3, "image format"
+        reader = LSBExtractor(img)
+        magic = "stealth_pngcomp"
+        read_magic = reader.get_next_n_bytes(len(magic)).decode("utf-8")
+        assert magic == read_magic, "magic number"
+        read_len = reader.read_32bit_integer() // 8
+        json_data = reader.get_next_n_bytes(read_len)
+        json_data = json.loads(gzip.decompress(json_data).decode("utf-8"))
+        if "Comment" in json_data:
+            json_data["Comment"] = json.loads(json_data["Comment"])
+        json_data["File path"] = file_path  # Add the "File path" field
+        return True, json_data, None
+    except Exception as e:
+        return False, file_path, str(e)
+
 def process_images(directory):
     image_extensions = ['.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff']
     all_metadata = []
     failed_files = []
 
+    files_to_process = []
     for root, dirs, files in os.walk(directory):
         for filename in files:
             if any(filename.lower().endswith(ext) for ext in image_extensions):
-                file_path = os.path.join(root, filename)
-                print(f"Processing {file_path}...")
-                try:
-                    img = Image.open(file_path)
-                    img = np.array(img)
-                    assert img.shape[-1] == 4 and len(img.shape) == 3, "image format"
-                    reader = LSBExtractor(img)
-                    magic = "stealth_pngcomp"
-                    read_magic = reader.get_next_n_bytes(len(magic)).decode("utf-8")
-                    assert magic == read_magic, "magic number"
-                    read_len = reader.read_32bit_integer() // 8
-                    json_data = reader.get_next_n_bytes(read_len)
-                    json_data = json.loads(gzip.decompress(json_data).decode("utf-8"))
-                    if "Comment" in json_data:
-                        json_data["Comment"] = json.loads(json_data["Comment"])
-                    json_data["File path"] = file_path  # Add the "File path" field
-                    all_metadata.append(json_data)
-                except Exception as e:
-                    print(f"Failed to process {file_path}: {e}")
-                    failed_files.append(file_path)
+                files_to_process.append(os.path.join(root, filename))
+
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = {executor.submit(process_single_image, file_path): file_path for file_path in files_to_process}
+        for future in concurrent.futures.as_completed(futures):
+            success, data, error = future.result()
+            if success:
+                all_metadata.append(data)
+            else:
+                print(f"Failed to process {data}: {error}")
+                failed_files.append(data)
 
     # Write all metadata to a JSON file
     json_output_file = 'all_metadata.json'
